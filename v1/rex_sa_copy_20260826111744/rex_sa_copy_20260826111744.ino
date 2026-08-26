@@ -51,8 +51,7 @@ const char* password = "77777777";
 #define PANEL     0x18E3
 
 // ---------------------------------------------------------------------
-// Pages (after removing Notifications): Home, Weather, Stopwatch,
-// RexStatus, Device, Settings = 6 total
+// Pages: Home, Weather, Stopwatch, RexStatus, Device, Settings = 6 total
 // ---------------------------------------------------------------------
 const int totalPages = 6;
 const int STOPWATCH_PAGE_INDEX = 2;
@@ -72,8 +71,7 @@ String weatherLocation = "Mumbai";
 const char* days[] = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 
 // ---------------------------------------------------------------------
-// Forecast strip data (index 2 = today). Free weather APIs don't offer
-// historical data, so -2/-1 stay "N/A" - only today/+1/+2 are real.
+// Forecast strip data (index 2 = today).
 // ---------------------------------------------------------------------
 struct ForecastDay { String dayLabel; String tempStr; bool available; };
 ForecastDay forecast[5] = {
@@ -89,17 +87,263 @@ ForecastDay forecast[5] = {
 // =======================================================================
 enum InputEvent { INPUT_NONE, INPUT_PREV, INPUT_MAIN, INPUT_NEXT, INPUT_POWER_TEST };
 
+void fullRedraw();    // forward declare
+
+// ===================== NOTIFICATIONS (T-Rex slide-in) =====================
+enum NotifState { NOTIF_IDLE, NOTIF_SLIDE_IN, NOTIF_HOLD, NOTIF_SLIDE_OUT };
+NotifState notifState = NOTIF_IDLE;
+
+String notifText = "";
+const char* NOTIF_PREFIX = "rex>";
+
+int notifDinoX = 480;                       // current left-edge x of the dino sprite
+const int NOTIF_DINO_RESTX = 385;           // resting x once fully slid in
+const int NOTIF_BAND_Y = 218;               // top of the overlay band (just above footer)
+const int NOTIF_BAND_H = 78;
+
+unsigned long notifLastStepTime = 0;
+const unsigned long NOTIF_STEP_INTERVAL = 15;   // ms between slide frames
+const int NOTIF_STEP_PX = 8;                    // px moved per frame
+
+unsigned long notifHoldStart = 0;
+const unsigned long NOTIF_HOLD_MS = 4000;       // how long it stays fully in view
+
+unsigned long notifLastRedraw = 0;
+const unsigned long NOTIF_REDRAW_INTERVAL = 40; // throttle so we don't hammer the bus
+
+// Blocky Chrome-dino-style T-Rex, drawn at (x, NOTIF_BAND_Y..). x = left edge.
+// Blocky Chrome-style T-Rex skull. x = left edge.
+// Exact Chrome-style T-Rex (blocky pixel art). x = left edge.
+// Big blocky REX. x = left edge of the text.
+void drawTRex(int x)
+{
+  int y = NOTIF_BAND_Y + 12;
+  uint16_t c = ORANGE;
+
+  // ===== R =====
+  // Vertical bar
+  tft.fillRect(x + 0,  y, 6, 28, c);
+  // Top bar
+  tft.fillRect(x + 6,  y, 14, 6, c);
+  // Middle bar
+  tft.fillRect(x + 6,  y + 11, 12, 6, c);
+  // Upper curve
+  tft.fillRect(x + 16, y + 6, 6, 6, c);
+  // Lower leg
+  tft.fillRect(x + 12, y + 17, 6, 11, c);
+  tft.fillRect(x + 16, y + 22, 6, 6, c);
+
+  // ===== E =====
+  // Vertical bar
+  tft.fillRect(x + 28, y, 6, 28, c);
+  // Top bar
+  tft.fillRect(x + 34, y, 16, 6, c);
+  // Middle bar
+  tft.fillRect(x + 34, y + 11, 14, 6, c);
+  // Bottom bar
+  tft.fillRect(x + 34, y + 22, 16, 6, c);
+
+  // ===== X =====
+  // Left-top to right-bottom
+  tft.fillRect(x + 56, y, 6, 8, c);
+  tft.fillRect(x + 60, y + 6, 6, 8, c);
+  tft.fillRect(x + 64, y + 12, 6, 8, c);
+  tft.fillRect(x + 68, y + 18, 6, 10, c);
+
+  // Right-top to left-bottom
+  tft.fillRect(x + 68, y, 6, 8, c);
+  tft.fillRect(x + 64, y + 6, 6, 8, c);
+  tft.fillRect(x + 60, y + 12, 6, 8, c);
+  tft.fillRect(x + 56, y + 18, 6, 10, c);
+}
+
+void drawSpeechBubble(int dinoX)
+{
+  int bubbleRight = dinoX - 10;
+  int bubbleW = bubbleRight - 20;
+  if (bubbleW < 60) return;   // not enough room yet, still sliding in
+
+  int bubbleX = bubbleRight - bubbleW;
+  int bubbleY = NOTIF_BAND_Y + 6;
+  int bubbleH = 56;
+
+  tft.fillRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 8, PANEL);
+  tft.drawRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 8, ORANGE);
+
+  // little tail pointing toward the dino's mouth
+  tft.fillTriangle(bubbleRight, bubbleY + bubbleH - 18,
+                    bubbleRight, bubbleY + bubbleH - 6,
+                    bubbleRight + 10, bubbleY + bubbleH - 12,
+                    PANEL);
+  tft.drawLine(bubbleRight, bubbleY + bubbleH - 18, bubbleRight + 10, bubbleY + bubbleH - 12, ORANGE);
+  tft.drawLine(bubbleRight, bubbleY + bubbleH - 6, bubbleRight + 10, bubbleY + bubbleH - 12, ORANGE);
+
+  tft.setTextColor(WHITE);
+  tft.setTextSize(3);
+  const int maxCharsPerLine = (bubbleW - 16) / 6;
+  if (maxCharsPerLine < 5) return;
+
+  int lineY = bubbleY + 10;
+  int start = 0, linesDrawn = 0;
+  while (start < (int)notifText.length() && linesDrawn < 4)
+  {
+    int end = start + maxCharsPerLine;
+    if (end >= (int)notifText.length())
+    {
+      end = notifText.length();
+    }
+    else
+    {
+      int lastSpace = notifText.lastIndexOf(' ', end);
+      if (lastSpace > start) end = lastSpace;
+    }
+    String lineStr = notifText.substring(start, end);
+    lineStr.trim();
+    tft.setCursor(bubbleX + 8, lineY);
+    tft.print(lineStr);
+    lineY += 12;
+    start = end;
+    linesDrawn++;
+  }
+}
+
+void drawNotifFrame()
+{
+  tft.fillRect(0, NOTIF_BAND_Y, 480, NOTIF_BAND_H, BLACK);
+  drawSpeechBubble(notifDinoX);
+  drawTRex(notifDinoX);
+}
+
+void showNotification(const String &text)
+{
+  notifText = text;
+  notifDinoX = 480;
+  notifState = NOTIF_SLIDE_IN;
+  notifLastStepTime = millis();
+}
+
+// Call this every loop(). Redraws the band on top of whatever page is
+// underneath, so page navigation or periodic refreshes never erase it
+// mid-animation.
+void updateNotification()
+{
+  if (notifState == NOTIF_IDLE) return;
+  unsigned long now = millis();
+
+  if (notifState == NOTIF_SLIDE_IN && now - notifLastStepTime >= NOTIF_STEP_INTERVAL)
+  {
+    notifLastStepTime = now;
+    notifDinoX -= NOTIF_STEP_PX;
+    if (notifDinoX <= NOTIF_DINO_RESTX)
+    {
+      notifDinoX = NOTIF_DINO_RESTX;
+      notifState = NOTIF_HOLD;
+      notifHoldStart = now;
+    }
+  }
+  else if (notifState == NOTIF_HOLD && now - notifHoldStart > NOTIF_HOLD_MS)
+  {
+    notifState = NOTIF_SLIDE_OUT;
+    notifLastStepTime = now;
+  }
+  else if (notifState == NOTIF_SLIDE_OUT && now - notifLastStepTime >= NOTIF_STEP_INTERVAL)
+  {
+    notifLastStepTime = now;
+    notifDinoX += NOTIF_STEP_PX;
+    if (notifDinoX >= 480)
+    {
+      notifState = NOTIF_IDLE;
+      fullRedraw();   // clean restore of whatever's underneath
+      return;
+    }
+  }
+
+  if (now - notifLastRedraw >= NOTIF_REDRAW_INTERVAL)
+  {
+    notifLastRedraw = now;
+    drawNotifFrame();
+  }
+}
+
+String serialLineBuffer = "";
+
+// ===================== INPUT QUEUE =====================
+// Needed because a single serial line like "mm" should produce TWO
+// separate INPUT_MAIN events (for double-press detection), but
+// pollInput() can only return one event per call.
+#define INPUT_QUEUE_SIZE 32
+InputEvent inputQueue[INPUT_QUEUE_SIZE];
+int inputQueueHead = 0;
+int inputQueueTail = 0;
+
+void queuePush(InputEvent ev)
+{
+  int nextTail = (inputQueueTail + 1) % INPUT_QUEUE_SIZE;
+  if (nextTail == inputQueueHead) return;  // queue full, drop it
+  inputQueue[inputQueueTail] = ev;
+  inputQueueTail = nextTail;
+}
+
+bool queuePop(InputEvent &ev)
+{
+  if (inputQueueHead == inputQueueTail) return false;  // empty
+  ev = inputQueue[inputQueueHead];
+  inputQueueHead = (inputQueueHead + 1) % INPUT_QUEUE_SIZE;
+  return true;
+}
+
+void processCommandLine(const String &line)
+{
+  // Each character in the line is treated as its own command,
+  // in order - so "mm" queues two INPUT_MAIN events, "np" queues
+  // INPUT_NEXT then INPUT_PREV, etc.
+  for (int i = 0; i < (int)line.length(); i++)
+  {
+    char c = line.charAt(i);
+    if (c == 'p' || c == 'P') queuePush(INPUT_PREV);
+    else if (c == 'm' || c == 'M') queuePush(INPUT_MAIN);
+    else if (c == 'n' || c == 'N') queuePush(INPUT_NEXT);
+    else if (c == 'o' || c == 'O') queuePush(INPUT_POWER_TEST);
+    // any other character is silently ignored
+  }
+}
+
 InputEvent pollInput()
 {
-  if (Serial.available())
+  // Drain any already-queued events first (from a previously
+  // parsed multi-char command line like "mm").
+  InputEvent queued;
+  if (queuePop(queued)) return queued;
+
+  while (Serial.available())
   {
     char c = Serial.read();
-    if (c == 'p' || c == 'P') return INPUT_PREV;
-    if (c == 'm' || c == 'M') return INPUT_MAIN;
-    if (c == 'n' || c == 'N') return INPUT_NEXT;
-    if (c == 'o' || c == 'O') return INPUT_POWER_TEST;
+
+    if (c == '\n' || c == '\r')
+    {
+      if (serialLineBuffer.length() > 0)
+      {
+        String line = serialLineBuffer;
+        serialLineBuffer = "";
+
+        if (line.startsWith(NOTIF_PREFIX))
+        {
+          String msg = line.substring(strlen(NOTIF_PREFIX));
+          msg.trim();
+          showNotification(msg);
+        }
+        else
+        {
+          processCommandLine(line);
+          if (queuePop(queued)) return queued;
+        }
+      }
+    }
+    else
+    {
+      if (serialLineBuffer.length() < 200) serialLineBuffer += c;
+    }
   }
-  // Future physical buttons plug in here (see earlier notes).
   return INPUT_NONE;
 }
 
@@ -133,7 +377,6 @@ const int settingsCount = sizeof(settings) / sizeof(settings[0]);
 int selectedOption = 0;
 
 void connectWiFi();   // forward declare
-void fullRedraw();    // forward declare
 
 void toggleSetting(int idx)
 {
@@ -676,7 +919,7 @@ void updateStopwatch()
   tft.print(buf);
 }
 
-// ---- Page 4 (was RexStatus, now 4th remaining page) ----
+// ---- Page 4: Rex Status ----
 void pageRexStatus()
 {
   drawHeader("REX STATUS");
@@ -696,7 +939,7 @@ void pageRexStatus()
   drawFooter();
 }
 
-// ---- Page 5 (was Device / "6th page"): backbench removed, WiFi detail added ----
+// ---- Page 5: Device ----
 void pageDevice()
 {
   drawHeader("DEVICE");
@@ -732,7 +975,7 @@ void pageDevice()
   drawFooter();
 }
 
-// ---- Page 6 (last): Settings - WiFi (real toggle) + Clock (real effect) ----
+// ---- Page 6: Settings - WiFi (real toggle) + Clock (real effect) ----
 void pageSettings()
 {
   drawHeader(uiMode == MODE_OPTION ? "SETTINGS (OPTION MODE)" : "SETTINGS");
@@ -841,7 +1084,7 @@ void connectWiFi()
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("Rex UI ready. Serial commands: p=PREV  m=MAIN  n=NEXT  o=power-combo test");
+  Serial.println("Rex UI ready. Serial commands: p=PREV  m=MAIN  n=NEXT  o=power-combo test  rex>msg=notification");
 
   tft.init();
   tft.setRotation(1);
@@ -860,7 +1103,7 @@ void setup()
 
   if (wifiConnected) {
     tft.setCursor(90, 180); tft.print("Fetching data...");
-    fetchAllWeather();   // was: fetchWeather(); fetchForecast();
+    fetchAllWeather();
     checkBackbench();
   }
 
@@ -876,7 +1119,7 @@ void loop()
   if (!poweredOff && wifiConnected && millis() - lastDataUpdate > 300000)
   {
     lastDataUpdate = millis();
-    fetchAllWeather();   // was: fetchWeather(); fetchForecast(); 
+    fetchAllWeather();
     checkBackbench();
     if (currentPage == 0 || currentPage == 1 || currentPage == 3 || currentPage == 4)
       fullRedraw();
@@ -891,6 +1134,7 @@ void loop()
       poweredOff = false;
       fullRedraw();
     }
+    updateNotification();
     return;
   }
 
@@ -902,4 +1146,6 @@ void loop()
     case INPUT_POWER_TEST: handlePowerCombo(); break;
     default: break;
   }
+
+  updateNotification();
 }
