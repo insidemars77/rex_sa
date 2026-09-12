@@ -4,6 +4,9 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <Preferences.h>
+
+Preferences prefs;
 
 class LGFX : public lgfx::LGFX_Device
 {
@@ -82,12 +85,53 @@ ForecastDay forecast[5] = {
   {"", "N/A", false},
 };
 
+// ---------------------------------------------------------------------
+// Face
+// ---------------------------------------------------------------------
+// ---- Bot face animation ----
+enum BotAnim { BOT_IDLE, BOT_BLINK, BOT_LOOK };
+BotAnim botAnim = BOT_IDLE;
+
+unsigned long botLastTick = 0;
+unsigned long botNextAction = 0;
+
+int botBlinkPhase = 0;     // 0 open → 1 closing → 2 closed → 3 opening
+int botLookOffsetX = 0;    // pupil shift (-4..4)
+int botLookTargetX = 0;
+
+const int BOT_CX = 240;
+const int BOT_CY = 125;
+
+// ---------------------------------------------------------------------
+// url
+// ---------------------------------------------------------------------
+
+#define URL_PREFIX     "url>"
+#define URLDEL_PREFIX  "urldel>"
+#define MAX_URLS 6
+
+struct UrlEntry {
+  String url;
+  bool live;      // last check result
+  bool checked;   // has it been checked at least once
+};
+UrlEntry urlList[MAX_URLS];
+int urlCount = 0;
+
+unsigned long lastUrlCheckTime = 0;
+const unsigned long URL_CHECK_INTERVAL = 15000; // check one url every 15s, round-robin
+int urlCheckCursor = 0;
+
+
 // =======================================================================
 // INPUT LAYER
 // =======================================================================
 enum InputEvent { INPUT_NONE, INPUT_PREV, INPUT_MAIN, INPUT_NEXT, INPUT_POWER_TEST };
 
 void fullRedraw();    // forward declare
+void addUrl(const String &u);
+void removeUrl(const String &u);
+void checkUrlStatus(int idx); 
 
 // ===================== NOTIFICATIONS (T-Rex slide-in) =====================
 enum NotifState { NOTIF_IDLE, NOTIF_SLIDE_IN, NOTIF_HOLD, NOTIF_SLIDE_OUT };
@@ -310,8 +354,6 @@ void processCommandLine(const String &line)
 
 InputEvent pollInput()
 {
-  // Drain any already-queued events first (from a previously
-  // parsed multi-char command line like "mm").
   InputEvent queued;
   if (queuePop(queued)) return queued;
 
@@ -326,11 +368,25 @@ InputEvent pollInput()
         String line = serialLineBuffer;
         serialLineBuffer = "";
 
+        Serial.println("[debug] line received: " + line); 
+
         if (line.startsWith(NOTIF_PREFIX))
         {
           String msg = line.substring(strlen(NOTIF_PREFIX));
           msg.trim();
           showNotification(msg);
+        }
+        else if (line.startsWith(URLDEL_PREFIX))
+        {
+          String u = line.substring(strlen(URLDEL_PREFIX));
+          u.trim();
+          removeUrl(u);
+        }
+        else if (line.startsWith(URL_PREFIX))
+        {
+          String u = line.substring(strlen(URL_PREFIX));
+          u.trim();
+          addUrl(u);
         }
         else
         {
@@ -676,23 +732,124 @@ void fetchAllWeather()
   }
 }
 
-void checkBackbench()
+void addUrl(const String &u)
 {
-  if (WiFi.status() != WL_CONNECTED) {
-    backbenchLive = false;
-    return;
+  for (int i = 0; i < urlCount; i++)
+    if (urlList[i].url == u) { Serial.println("[url] Already tracking: " + u); return; }
+
+  if (urlCount >= MAX_URLS) { Serial.println("[url] List full, cannot add: " + u); return; }
+
+  urlList[urlCount].url = u;
+  urlList[urlCount].live = false;
+  urlList[urlCount].checked = false;
+  urlCount++;
+  Serial.println("[url] Added: " + u);
+  saveUrlsToFlash();   // <-- persist immediately
+  if (currentPage == 3) fullRedraw();
+}
+
+void removeUrl(const String &u)
+{
+  for (int i = 0; i < urlCount; i++)
+  {
+    if (urlList[i].url == u)
+    {
+      for (int j = i; j < urlCount - 1; j++) urlList[j] = urlList[j + 1];
+      urlCount--;
+      Serial.println("[url] Removed: " + u);
+      saveUrlsToFlash();   // <-- persist immediately
+      if (currentPage == 3) fullRedraw();
+      return;
+    }
   }
+  Serial.println("[url] Not found: " + u);
+}
+
+void checkUrlStatus(int idx)
+{
+  if (idx < 0 || idx >= urlCount) return;
+  if (WiFi.status() != WL_CONNECTED) { urlList[idx].live = false; return; }
+
+  String target = urlList[idx].url;
+  if (!target.startsWith("http://") && !target.startsWith("https://"))
+    target = "https://" + target;
 
   HTTPClient http;
-  http.begin("https://backbench-rosy.vercel.app");
+  http.begin(target);
   http.setTimeout(6000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
   int code = http.GET();
-  backbenchLive = (code > 0 && code < 400);
-  Serial.printf("Backbench status: %d -> %s\n", code, backbenchLive ? "LIVE" : "DOWN");
+  urlList[idx].live = (code > 0 && code < 400);
+  urlList[idx].checked = true;
+  Serial.printf("[url] %s -> %d (%s)\n", urlList[idx].url.c_str(), code, urlList[idx].live ? "LIVE" : "DOWN");
   http.end();
+
+  if (currentPage == 3) fullRedraw();
 }
+
+void updateUrlChecks()
+{
+  if (poweredOff || urlCount == 0) return;
+  unsigned long now = millis();
+  if (now - lastUrlCheckTime < URL_CHECK_INTERVAL) return;
+  lastUrlCheckTime = now;
+
+  checkUrlStatus(urlCheckCursor);
+  urlCheckCursor = (urlCheckCursor + 1) % urlCount;
+}
+
+void saveUrlsToFlash()
+{
+  String joined = "";
+  for (int i = 0; i < urlCount; i++)
+  {
+    joined += urlList[i].url;
+    if (i < urlCount - 1) joined += "|";
+  }
+
+  prefs.begin("rex-urls", false);   // false = read/write mode
+  prefs.putString("list", joined);
+  prefs.end();
+
+  Serial.println("[url] Saved to flash: " + joined);
+}
+
+void loadUrlsFromFlash()
+{
+  prefs.begin("rex-urls", true);    // true = read-only mode
+  String joined = prefs.getString("list", "");
+  prefs.end();
+
+  urlCount = 0;
+  if (joined.length() == 0)
+  {
+    Serial.println("[url] No saved URLs found in flash.");
+    return;
+  }
+
+  int start = 0;
+  while (start < (int)joined.length() && urlCount < MAX_URLS)
+  {
+    int sep = joined.indexOf('|', start);
+    String piece = (sep == -1) ? joined.substring(start) : joined.substring(start, sep);
+    piece.trim();
+
+    if (piece.length() > 0)
+    {
+      urlList[urlCount].url = piece;
+      urlList[urlCount].live = false;
+      urlList[urlCount].checked = false;
+      urlCount++;
+    }
+
+    if (sep == -1) break;
+    start = sep + 1;
+  }
+
+  Serial.println("[url] Loaded " + String(urlCount) + " URL(s) from flash.");
+}
+
 
 // =======================================================================
 // RENDERING
@@ -733,59 +890,171 @@ void card(int x, int y, int w, int h)
   tft.drawRoundRect(x, y, w, h, 7, DARKGRAY);
 }
 
-// ---- Page 1: Home ----
+// ---- Page 1: Home (bot face + time only) ----
+// Add these near your other color defines if you don't have them yet
+#define ORANGE_HL  tft.color565(255, 220, 150)  // warm highlight, near-white orange
+#define BLUSH      tft.color565(120, 40, 10)    // dim warm blush, subtle against black
+
+void drawBotFaceFrame()
+{
+  const int cx = BOT_CX;
+  const int cy = BOT_CY + 10;
+
+  // Clear only the face area
+  tft.fillRect(cx - 90, cy - 70, 180, 140, BLACK);
+
+  // ---- Eye geometry ----
+  int eyeW = 46;
+  int eyeH = (botBlinkPhase == 2) ? 6 : 58;
+
+  int eyeY = cy + 6;
+  if (botBlinkPhase == 1 || botBlinkPhase == 3)
+    eyeY += 3;
+
+  int leftX  = cx - 48;
+  int rightX = cx + 48;
+
+  // ---- Blush (draw first, sits behind everything) ----
+  tft.fillEllipse(leftX,  eyeY + 34, 20, 10, BLUSH);
+  tft.fillEllipse(rightX, eyeY + 34, 20, 10, BLUSH);
+
+  // ---- Eye sockets ----
+  tft.fillEllipse(leftX,  eyeY, eyeW / 2, eyeH / 2, ORANGE);
+  tft.fillEllipse(rightX, eyeY, eyeW / 2, eyeH / 2, ORANGE);
+
+  // ---- Pupils + sparkle highlight ----
+  if (botBlinkPhase != 2)
+  {
+    int px = botLookOffsetX;
+    int pupilW = 16;
+    int pupilH = 20;
+    int pupilY = eyeY + 8;
+
+    // Pupil
+    tft.fillEllipse(leftX  + px, pupilY, pupilW / 2, pupilH / 2, BLACK);
+    tft.fillEllipse(rightX + px, pupilY, pupilW / 2, pupilH / 2, BLACK);
+
+    // Sparkle: small bright dot, upper-left of each pupil.
+    // This one detail reads as "cute" more than anything else here —
+    // it's what makes the eyes look wet/alive instead of flat dots.
+    int hlX = -3, hlY = -5;
+    tft.fillCircle(leftX  + px + hlX, pupilY + hlY, 3, ORANGE_HL);
+    tft.fillCircle(rightX + px + hlX, pupilY + hlY, 3, ORANGE_HL);
+
+    // Tiny secondary sparkle, smaller and lower-right — adds depth
+    tft.fillCircle(leftX  + px - hlX + 2, pupilY - hlY + 3, 1, ORANGE_HL);
+    tft.fillCircle(rightX + px - hlX + 2, pupilY - hlY + 3, 1, ORANGE_HL);
+  }
+}
+
+void updateBotFace()
+{
+  if (currentPage != 0 || poweredOff) return;
+
+  unsigned long now = millis();
+
+  // Schedule next idle action
+  if (botAnim == BOT_IDLE && now >= botNextAction)
+  {
+    if (random(0, 100) < 55)
+    {
+      botAnim = BOT_BLINK;
+      botBlinkPhase = 1;
+      botLastTick = now;
+    }
+    else
+    {
+      botAnim = BOT_LOOK;
+      botLookTargetX = random(-4, 5);
+      botLastTick = now;
+    }
+    botNextAction = now + random(1800, 4200);
+  }
+
+  // Blink animation
+  if (botAnim == BOT_BLINK && now - botLastTick >= 55)
+  {
+    botLastTick = now;
+    botBlinkPhase++;
+    if (botBlinkPhase > 3)
+    {
+      botBlinkPhase = 0;
+      botAnim = BOT_IDLE;
+    }
+    drawBotFaceFrame();
+  }
+
+  // Look left/right (pupils ease toward target)
+  if (botAnim == BOT_LOOK && now - botLastTick >= 40)
+  {
+    botLastTick = now;
+    if (botLookOffsetX < botLookTargetX) botLookOffsetX++;
+    else if (botLookOffsetX > botLookTargetX) botLookOffsetX--;
+    else
+    {
+      static unsigned long holdStart = 0;
+      if (holdStart == 0) holdStart = now;
+      if (now - holdStart > 500)
+      {
+        holdStart = 0;
+        if (botLookTargetX != 0)
+        {
+          botLookTargetX = 0;
+        }
+        else
+        {
+          botAnim = BOT_IDLE;
+        }
+      }
+    }
+    drawBotFaceFrame();
+  }
+}
+
 void pageHome()
 {
-  drawHeader("WORKFLOW ASSISTANT");
+  drawHeader("REX");
+
+  botBlinkPhase = 0;
+  botLookOffsetX = 0;
+  botAnim = BOT_IDLE;
+  botNextAction = millis() + 1000;
+  drawBotFaceFrame();
 
   struct tm ti;
   bool ok = getLocalTime(&ti, 50);
 
-  card(12, 55, 285, 115);
-  tft.setTextColor(GRAY); tft.setTextSize(1);
-  tft.setCursor(28, 70);
-  tft.print(ok ? days[ti.tm_wday] : "---");
+  tft.setTextColor(WHITE);
+  tft.setTextSize(4);
 
-  tft.setTextColor(WHITE); tft.setTextSize(5);
-  tft.setCursor(28, 90);
   if (ok)
   {
-    char t[8]; bool showAmPm, isPm;
+    char t[8];
+    bool showAmPm, isPm;
     formatClock(ti, t, sizeof(t), showAmPm, isPm);
+
+    int textW = strlen(t) * 24;
+    tft.setCursor((480 - textW) / 2, 220);
     tft.print(t);
+
     if (showAmPm)
     {
-      tft.setTextColor(ORANGE); tft.setTextSize(2);
-      tft.setCursor(195, 105);
+      tft.setTextColor(ORANGE);
+      tft.setTextSize(2);
+      tft.setCursor((480 - textW) / 2 + textW + 8, 230);
       tft.print(isPm ? "PM" : "AM");
     }
   }
   else
   {
+    tft.setCursor(180, 220);
     tft.print("--:--");
   }
 
-  card(308, 55, 160, 115);
-  tft.setTextColor(GRAY); tft.setTextSize(1);
-  tft.setCursor(322, 70); tft.print("WEATHER");
-  tft.setTextColor(ORANGE); tft.setTextSize(3);
-  tft.setCursor(322, 95);
-  tft.printf("%dC", weatherTemp);
-  tft.setTextColor(WHITE); tft.setTextSize(1);
-  tft.setCursor(322, 140);
-  tft.print(weatherCondition.substring(0, 14));
-
-  card(12, 185, 456, 95);
-  tft.setTextColor(GRAY); tft.setTextSize(1);
-  tft.setCursor(28, 200); tft.print("REX STATUS");
-
-  tft.setTextColor(backbenchLive ? GREEN : RED); tft.setTextSize(2);
-  tft.setCursor(28, 225);
-  tft.print(backbenchLive ? "BACKBENCH LIVE" : "BACKBENCH DOWN");
-
-  tft.setTextColor(GRAY); tft.setTextSize(1);
-  tft.setCursor(250, 230);
-  tft.print(wifiConnected ? "WIFI OK" : "NO WIFI");
+  tft.setTextColor(GRAY);
+  tft.setTextSize(1);
+  tft.setCursor(210, 265);
+  tft.print(ok ? days[ti.tm_wday] : "---");
 
   drawFooter();
 }
@@ -799,28 +1068,32 @@ void updateClock()
   struct tm ti;
   if (!getLocalTime(&ti, 10)) return;
 
-  tft.fillRect(20, 85, 270, 65, PANEL);
-
-  tft.setTextColor(GRAY);
-  tft.setTextSize(1);
-  tft.setCursor(28, 70);
-  tft.print(days[ti.tm_wday]);
+  // Only clear the time strip (under the face)
+  tft.fillRect(60, 215, 360, 60, BLACK);
 
   tft.setTextColor(WHITE);
-  tft.setTextSize(5);
-  tft.setCursor(28, 90);
+  tft.setTextSize(4);
 
-  char t[8]; bool showAmPm, isPm;
+  char t[8];
+  bool showAmPm, isPm;
   formatClock(ti, t, sizeof(t), showAmPm, isPm);
+
+  int textW = strlen(t) * 24;
+  tft.setCursor((480 - textW) / 2, 220);
   tft.print(t);
 
   if (showAmPm)
   {
     tft.setTextColor(ORANGE);
     tft.setTextSize(2);
-    tft.setCursor(195, 105);
+    tft.setCursor((480 - textW) / 2 + textW + 8, 230);
     tft.print(isPm ? "PM" : "AM");
   }
+
+  tft.setTextColor(GRAY);
+  tft.setTextSize(1);
+  tft.setCursor(210, 265);
+  tft.print(days[ti.tm_wday]);
 }
 
 // ---- Page 2: Weather (with 5-day forecast strip) ----
@@ -920,21 +1193,41 @@ void updateStopwatch()
 }
 
 // ---- Page 4: Rex Status ----
-void pageRexStatus()
+void pageUrlList()
 {
-  drawHeader("REX STATUS");
+  drawHeader("URL CHECKER");
   card(12, 55, 456, 225);
 
-  tft.setTextColor(backbenchLive ? GREEN : RED); tft.setTextSize(3);
-  tft.setCursor(120, 100);
-  tft.print(backbenchLive ? "LIVE" : "DOWN");
+  if (urlCount == 0)
+  {
+    tft.setTextColor(GRAY);
+    tft.setTextSize(2);
+    tft.setCursor(90, 150);
+    tft.print("No URLs tracked");
+    tft.setTextSize(1);
+    tft.setCursor(50, 190);
+    tft.print("Send: url>www.example.com");
+  }
+  else
+  {
+    int rowH = 225 / MAX_URLS;
+    int y = 65;
+    for (int i = 0; i < urlCount; i++)
+    {
+      uint16_t dotColor = !urlList[i].checked ? GRAY : (urlList[i].live ? GREEN : RED);
+      tft.fillCircle(30, y + 8, 5, dotColor);
 
-  tft.setTextColor(ORANGE); tft.setTextSize(2);
-  tft.setCursor(130, 160); tft.print("BACKBENCH");
+      tft.setTextColor(WHITE);
+      tft.setTextSize(1);
+      tft.setCursor(46, y + 3);
 
-  tft.setTextColor(GRAY); tft.setTextSize(1);
-  tft.setCursor(140, 210);
-  tft.print(backbenchLive ? "Service is online" : "Service unreachable");
+      String display = urlList[i].url;
+      if (display.length() > 58) display = display.substring(0, 55) + "...";
+      tft.print(display);
+
+      y += rowH;
+    }
+  }
 
   drawFooter();
 }
@@ -1025,7 +1318,7 @@ void fullRedraw()
     case 0: pageHome(); break;
     case 1: pageWeather(); break;
     case 2: pageStopwatch(); break;
-    case 3: pageRexStatus(); break;
+    case 3: pageUrlList(); break;
     case 4: pageDevice(); break;
     case 5: pageSettings(); break;
   }
@@ -1083,8 +1376,17 @@ void connectWiFi()
 
 void setup()
 {
+  void fullRedraw();
+  void addUrl(const String &u);
+  void removeUrl(const String &u);
+  void checkUrlStatus(int idx);
+  void saveUrlsToFlash();
+  void loadUrlsFromFlash();
+
   Serial.begin(115200);
   Serial.println("Rex UI ready. Serial commands: p=PREV  m=MAIN  n=NEXT  o=power-combo test  rex>msg=notification");
+
+  loadUrlsFromFlash();
 
   tft.init();
   tft.setRotation(1);
@@ -1104,7 +1406,6 @@ void setup()
   if (wifiConnected) {
     tft.setCursor(90, 180); tft.print("Fetching data...");
     fetchAllWeather();
-    checkBackbench();
   }
 
   fullRedraw();
@@ -1115,12 +1416,13 @@ void loop()
 {
   updateClock();
   updateStopwatch();
+  updateBotFace();
+  updateUrlChecks();
 
   if (!poweredOff && wifiConnected && millis() - lastDataUpdate > 300000)
   {
     lastDataUpdate = millis();
     fetchAllWeather();
-    checkBackbench();
     if (currentPage == 0 || currentPage == 1 || currentPage == 3 || currentPage == 4)
       fullRedraw();
   }
