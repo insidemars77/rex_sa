@@ -1070,7 +1070,8 @@ class RexLauncher(ctk.CTk):
                     text=True,
                     timeout=120,
                     encoding="utf-8",
-                    errors="replace"
+                    errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 out = result.stdout or ""
                 err = result.stderr or ""
