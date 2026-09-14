@@ -70,6 +70,8 @@ class RexLauncher(ctk.CTk):
         self.configure(fg_color=BLACK)
 
         self.serial = None
+        self.rex_app_process = None
+        self.closing = False
         self.urls = load_urls()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -1062,44 +1064,57 @@ class RexLauncher(ctk.CTk):
         self.script_output.insert("end", f"$ cd {app_dir}\n$ {' '.join(cmd)}\n\n")
 
         def worker():
+            process = None
+            timed_out = False
             try:
-                result = subprocess.run(
+                process = subprocess.Popen(
                     cmd,
                     cwd=app_dir,          # important for: from ui.features import ...
                     capture_output=True,
                     text=True,
-                    timeout=120,
                     encoding="utf-8",
                     errors="replace",
                     creationflags=subprocess.CREATE_NO_WINDOW
                 )
-                out = result.stdout or ""
-                err = result.stderr or ""
-                code = result.returncode
+                self.rex_app_process = process
+                if self.closing:
+                    process.terminate()
+
+                try:
+                    out, err = process.communicate(timeout=120)
+                    code = process.returncode
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    process.kill()
+                    out, err = process.communicate()
+                    code = process.returncode
 
                 def done():
+                    if self.closing:
+                        return
                     if out:
                         self.script_output.insert("end", out)
                     if err:
                         self.script_output.insert("end", err)
                     self.script_output.insert("end", f"\n[exit {code}]\n")
-                    if code == 0:
+                    if timed_out:
+                        self.script_status.configure(text="Timed out", text_color=RED)
+                        self.script_output.insert("end", "Script timed out (120s).\n")
+                    elif code == 0:
                         self.script_status.configure(text="Done", text_color=GREEN)
                     else:
                         self.script_status.configure(text=f"Failed ({code})", text_color=RED)
 
                 self.after(0, done)
-
-            except subprocess.TimeoutExpired:
-                self.after(0, lambda: (
-                    self.script_status.configure(text="Timed out", text_color=RED),
-                    self.script_output.insert("end", "Script timed out (120s).\n")
-                ))
             except Exception as e:
-                self.after(0, lambda: (
-                    self.script_status.configure(text="Error", text_color=RED),
-                    self.script_output.insert("end", str(e) + "\n")
-                ))
+                if not self.closing:
+                    self.after(0, lambda: (
+                        self.script_status.configure(text="Error", text_color=RED),
+                        self.script_output.insert("end", str(e) + "\n")
+                    ))
+            finally:
+                if self.rex_app_process is process:
+                    self.rex_app_process = None
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1109,6 +1124,9 @@ class RexLauncher(ctk.CTk):
 
     def on_close(self):
 
+        self.closing = True
+        if self.rex_app_process and self.rex_app_process.poll() is None:
+            self.rex_app_process.terminate()
         self.disconnect_serial()
         self.destroy()
 
