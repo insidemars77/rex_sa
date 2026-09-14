@@ -1108,9 +1108,10 @@ class RexLauncher(ctk.CTk):
                 self.after(0, done)
             except Exception as e:
                 if not self.closing:
+                    error_message = str(e)
                     self.after(0, lambda: (
                         self.script_status.configure(text="Error", text_color=RED),
-                        self.script_output.insert("end", str(e) + "\n")
+                        self.script_output.insert("end", error_message + "\n")
                     ))
             finally:
                 if self.rex_app_process is process:
