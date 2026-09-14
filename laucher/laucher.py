@@ -1038,13 +1038,13 @@ class RexLauncher(ctk.CTk):
         # In a PyInstaller build, sys.executable is rex_launcher.exe itself.
         # Use the installed Python interpreter when launching the external app.
         if getattr(sys, "frozen", False):
-            python_executable = shutil.which("python")
+            python_executable = shutil.which("pythonw")
             if python_executable:
                 cmd = [python_executable, path]
             else:
-                python_launcher = shutil.which("py")
-                if python_launcher:
-                    cmd = [python_launcher, "-3", path]
+                python_executable = shutil.which("python")
+                if python_executable:
+                    cmd = [python_executable, path]
                 else:
                     self.script_status.configure(
                         text="Python not found",
