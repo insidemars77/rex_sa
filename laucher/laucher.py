@@ -7,6 +7,8 @@ import os
 import threading
 import subprocess
 import sys
+import shutil
+import time
 from tkinter import filedialog
 
 # ============================================================
@@ -28,6 +30,8 @@ RED = "#ff453a"
 
 URL_FILE = "rex_urls.json"
 BAUD_RATE = 115200
+HANDSHAKE_TIMEOUT = 15
+DEVICE_READY_RESPONSE = "REX_READY"
 
 
 # ============================================================
@@ -232,8 +236,8 @@ class RexLauncher(ctk.CTk):
         self.status_card(
             cards,
             "DEVICE",
-            "CONNECTED" if self.serial else "OFFLINE",
-            GREEN if self.serial else RED
+            "CONNECTED" if self.is_serial_connected() else "OFFLINE",
+            GREEN if self.is_serial_connected() else RED
         )
 
         self.status_card(
@@ -331,6 +335,9 @@ class RexLauncher(ctk.CTk):
     # SERIAL
     # ========================================================
 
+    def is_serial_connected(self):
+        return self.serial is not None and self.serial.is_open
+
     def refresh_ports(self):
 
         ports = [
@@ -356,12 +363,39 @@ class RexLauncher(ctk.CTk):
 
         try:
 
-            self.serial = serial.Serial(
+            connection = serial.Serial(
                 port,
                 BAUD_RATE,
-                timeout=0.1
+                timeout=0.2
             )
 
+            self.connection_label.configure(
+                text="● VERIFYING",
+                text_color=ORANGE
+            )
+            connection.reset_input_buffer()
+            connection.write(b"ping\n")
+            deadline = time.monotonic() + HANDSHAKE_TIMEOUT
+            device_ready = False
+            while time.monotonic() < deadline:
+                response = connection.readline().decode(
+                    "utf-8",
+                    errors="ignore"
+                ).strip()
+                if response == DEVICE_READY_RESPONSE:
+                    device_ready = True
+                    break
+
+            if not device_ready:
+                connection.close()
+                self.serial = None
+                self.connection_label.configure(
+                    text="● NOT REX-SA",
+                    text_color=RED
+                )
+                return
+
+            self.serial = connection
             self.connection_label.configure(
                 text="● CONNECTED",
                 text_color=GREEN
@@ -398,7 +432,7 @@ class RexLauncher(ctk.CTk):
 
     def send_serial(self, text):
 
-        if not self.serial:
+        if not self.is_serial_connected():
             return
 
         try:
@@ -980,7 +1014,7 @@ class RexLauncher(ctk.CTk):
 
     def run_script(self):
 
-        if not self.serial:
+        if not self.is_serial_connected():
             self.script_status.configure(
                 text="Rex-SA not connected",
                 text_color=RED
@@ -999,7 +1033,29 @@ class RexLauncher(ctk.CTk):
             )
             return
 
-        cmd = [sys.executable, path]
+        # In a PyInstaller build, sys.executable is rex_launcher.exe itself.
+        # Use the installed Python interpreter when launching the external app.
+        if getattr(sys, "frozen", False):
+            python_executable = shutil.which("python")
+            if python_executable:
+                cmd = [python_executable, path]
+            else:
+                python_launcher = shutil.which("py")
+                if python_launcher:
+                    cmd = [python_launcher, "-3", path]
+                else:
+                    self.script_status.configure(
+                        text="Python not found",
+                        text_color=RED
+                    )
+                    self.script_output.delete("1.0", "end")
+                    self.script_output.insert(
+                        "end",
+                        "Install Python or add it to PATH before running rex-app.\n"
+                    )
+                    return
+        else:
+            cmd = [sys.executable, path]
 
         self.script_status.configure(text="Running…", text_color=ORANGE)
         self.script_output.delete("1.0", "end")

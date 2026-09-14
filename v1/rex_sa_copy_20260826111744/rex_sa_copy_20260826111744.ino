@@ -370,7 +370,11 @@ InputEvent pollInput()
 
         Serial.println("[debug] line received: " + line); 
 
-        if (line.startsWith(NOTIF_PREFIX))
+        if (line.equalsIgnoreCase("ping"))
+        {
+          Serial.println("REX_READY");
+        }
+        else if (line.startsWith(NOTIF_PREFIX))
         {
           String msg = line.substring(strlen(NOTIF_PREFIX));
           msg.trim();
