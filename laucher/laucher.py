@@ -1070,7 +1070,8 @@ class RexLauncher(ctk.CTk):
                 process = subprocess.Popen(
                     cmd,
                     cwd=app_dir,          # important for: from ui.features import ...
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
