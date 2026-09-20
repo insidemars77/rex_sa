@@ -27,6 +27,7 @@ WHITE = "#f2f2f2"
 GRAY = "#888888"
 GREEN = "#35c759"
 RED = "#ff453a"
+GRID = "#292929"
 
 URL_FILE = "rex_urls.json"
 BAUD_RATE = 115200
@@ -63,7 +64,7 @@ class RexLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("REX Launcher")
+        self.title("REX // COMMAND NODE")
         self.geometry("1050x680")
         self.minsize(900, 600)
 
@@ -99,21 +100,21 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.header,
-            text="🦖 REX",
+            text="> REX",
             font=("Consolas", 26, "bold"),
             text_color=ORANGE
         ).pack(side="left", padx=25)
 
         ctk.CTkLabel(
             self.header,
-            text="CONTROL CENTER",
+            text="// COMMAND NODE",
             font=("Consolas", 13),
             text_color=GRAY
         ).pack(side="left")
 
         self.connection_label = ctk.CTkLabel(
             self.header,
-            text="● DISCONNECTED",
+            text="[ OFFLINE ]",
             font=("Consolas", 13, "bold"),
             text_color=RED
         )
@@ -141,17 +142,17 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             sidebar,
-            text="REX",
+            text="SYS // NAVIGATION",
             font=("Consolas", 14, "bold"),
             text_color=GRAY
         ).pack(pady=(30, 15))
 
-        self.add_nav_button(sidebar, "Dashboard", self.show_dashboard)
-        self.add_nav_button(sidebar, "Device", self.show_device)
-        self.add_nav_button(sidebar, "URL Manager", self.show_urls)
-        self.add_nav_button(sidebar, "Controls", self.show_controls)
-        self.add_nav_button(sidebar, "Services", self.show_services)
-        self.add_nav_button(sidebar, "Scripts", self.show_scripts)
+        self.add_nav_button(sidebar, "01  DASHBOARD", self.show_dashboard)
+        self.add_nav_button(sidebar, "02  DEVICE LINK", self.show_device)
+        self.add_nav_button(sidebar, "03  URL MATRIX", self.show_urls)
+        self.add_nav_button(sidebar, "04  CONTROLS", self.show_controls)
+        self.add_nav_button(sidebar, "05  SERVICES", self.show_services)
+        self.add_nav_button(sidebar, "06  EXECUTOR", self.show_scripts)
 
         # ---------- CONTENT ----------
 
@@ -181,7 +182,7 @@ class RexLauncher(ctk.CTk):
             anchor="w",
             font=("Consolas", 14),
             fg_color="transparent",
-            hover_color="#292929",
+            hover_color=GRID,
             command=command
         )
 
@@ -206,7 +207,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Dashboard",
+            text="COMMAND DECK",
             font=("Consolas", 30, "bold"),
             text_color=WHITE
         ).pack(
@@ -217,7 +218,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Rex developer cyberdeck control center",
+            text="ESP32 // REX-SA SERIAL CONTROL TERMINAL",
             font=("Consolas", 14),
             text_color=GRAY
         ).pack(
@@ -271,7 +272,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             quick,
-            text="QUICK CONTROL",
+            text="[ QUICK COMMANDS ]",
             font=("Consolas", 15, "bold"),
             text_color=ORANGE
         ).pack(
@@ -372,7 +373,7 @@ class RexLauncher(ctk.CTk):
             )
 
             self.connection_label.configure(
-                text="● VERIFYING",
+                text="[ VERIFYING LINK ]",
                 text_color=ORANGE
             )
             connection.reset_input_buffer()
@@ -392,14 +393,14 @@ class RexLauncher(ctk.CTk):
                 connection.close()
                 self.serial = None
                 self.connection_label.configure(
-                    text="● NOT REX-SA",
+                    text="[ INVALID DEVICE ]",
                     text_color=RED
                 )
                 return
 
             self.serial = connection
             self.connection_label.configure(
-                text="● CONNECTED",
+                text="[ LINKED // REX_READY ]",
                 text_color=GREEN
             )
 
@@ -410,7 +411,7 @@ class RexLauncher(ctk.CTk):
             self.serial = None
 
             self.connection_label.configure(
-                text="● ERROR",
+                text="[ LINK ERROR ]",
                 text_color=RED
             )
 
@@ -428,7 +429,7 @@ class RexLauncher(ctk.CTk):
         self.serial = None
 
         self.connection_label.configure(
-            text="● DISCONNECTED",
+            text="[ OFFLINE ]",
             text_color=RED
         )
 
@@ -457,7 +458,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Device",
+            text="DEVICE LINK",
             font=("Consolas", 30, "bold")
         ).pack(
             anchor="w",
@@ -511,14 +512,14 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkButton(
             row,
-            text="REFRESH",
+            text="SCAN PORTS",
             width=100,
             command=self.refresh_ports
         ).pack(side="left", padx=10)
 
         ctk.CTkButton(
             row,
-            text="CONNECT",
+            text="LINK",
             width=100,
             fg_color=ORANGE,
             hover_color=ORANGE_HOVER,
@@ -527,7 +528,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkButton(
             row,
-            text="DISCONNECT",
+            text="UNLINK",
             width=110,
             command=self.disconnect_serial
         ).pack(side="left", padx=5)
@@ -542,7 +543,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Rex-SA Controls",
+            text="CONTROL MATRIX",
             font=("Consolas", 30, "bold")
         ).pack(
             anchor="w",
@@ -552,7 +553,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="USB serial control interface",
+            text="USB SERIAL // LOW-LATENCY COMMAND CHANNEL",
             text_color=GRAY,
             font=("Consolas", 13)
         ).pack(
@@ -610,7 +611,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="URL Manager",
+            text="URL MATRIX",
             font=("Consolas", 30, "bold")
         ).pack(
             anchor="w",
@@ -620,7 +621,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Services Rex should remember and monitor",
+            text="SERVICE ENDPOINTS // HEALTH MONITOR",
             font=("Consolas", 13),
             text_color=GRAY
         ).pack(
@@ -648,7 +649,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkButton(
             toolbar,
-            text="CHECK ALL",
+            text="SCAN ALL",
             command=self.check_all_urls
         ).pack(side="left", padx=10)
 
@@ -712,21 +713,21 @@ class RexLauncher(ctk.CTk):
 
             ctk.CTkButton(
                 row,
-                text="SEND",
+                text="TRANSMIT",
                 width=70,
                 command=lambda u=item["url"]: self.send_url(u)
             ).pack(side="right", padx=5)
 
             ctk.CTkButton(
                 row,
-                text="CHECK",
+                text="PROBE",
                 width=70,
                 command=lambda i=index: self.check_url(i)
             ).pack(side="right", padx=5)
 
             ctk.CTkButton(
                 row,
-                text="DELETE",
+                text="PURGE",
                 width=70,
                 fg_color="#333333",
                 hover_color="#444444",
@@ -797,7 +798,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkButton(
             dialog,
-            text="SAVE",
+            text="COMMIT",
             fg_color=ORANGE,
             hover_color=ORANGE_HOVER,
             command=save
@@ -885,7 +886,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Services",
+            text="SERVICE MONITOR",
             font=("Consolas", 30, "bold")
         ).pack(
             anchor="w",
@@ -895,7 +896,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Saved Rex services",
+            text="TRACKED ENDPOINTS // LIVE STATUS",
             font=("Consolas", 13),
             text_color=GRAY
         ).pack(
@@ -952,14 +953,14 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="Scripts",
+            text="EXECUTOR",
             font=("Consolas", 30, "bold"),
             text_color=WHITE
         ).pack(anchor="w", padx=35, pady=(35, 5))
 
         ctk.CTkLabel(
             self.content,
-            text="Runs rex-app main.py when Rex-SA is connected",
+            text="REX-APP PROCESS CONTROL // REQUIRES VERIFIED DEVICE LINK",
             font=("Consolas", 13),
             text_color=GRAY
         ).pack(anchor="w", padx=37)
@@ -976,7 +977,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkButton(
             btn_row,
-            text="RUN REX-APP",
+            text=">> EXECUTE REX-APP",
             width=160,
             height=40,
             fg_color=ORANGE,
@@ -987,7 +988,7 @@ class RexLauncher(ctk.CTk):
 
         self.script_status = ctk.CTkLabel(
             btn_row,
-            text="Waiting…",
+            text="IDLE // AWAITING COMMAND",
             font=("Consolas", 12),
             text_color=GRAY
         )
@@ -995,7 +996,7 @@ class RexLauncher(ctk.CTk):
 
         ctk.CTkLabel(
             self.content,
-            text="OUTPUT",
+            text="[ PROCESS OUTPUT ]",
             font=("Consolas", 12, "bold"),
             text_color=GRAY
         ).pack(anchor="w", padx=37, pady=(5, 5))
