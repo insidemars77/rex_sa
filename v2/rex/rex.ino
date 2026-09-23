@@ -39,6 +39,13 @@ public:
 
 LGFX tft;
 
+// Physical controls: wire each push button between its GPIO and GND.
+// INPUT_PULLUP keeps the pin HIGH when released and LOW when pressed.
+const int PREV_BUTTON_PIN = 19;
+const int MAIN_BUTTON_PIN = 20;
+const int NEXT_BUTTON_PIN = 21;
+const unsigned long BUTTON_DEBOUNCE_MS = 35;
+
 // ============ WiFi ============
 const char* ssid     = "POCO X7 Pro";
 const char* password = "77777777";
@@ -326,6 +333,48 @@ void queuePush(InputEvent ev)
   if (nextTail == inputQueueHead) return;  // queue full, drop it
   inputQueue[inputQueueTail] = ev;
   inputQueueTail = nextTail;
+}
+
+struct ButtonState
+{
+  int pin;
+  InputEvent event;
+  bool stableState;
+  bool lastReading;
+  unsigned long lastChange;
+};
+
+ButtonState physicalButtons[] = {
+  { PREV_BUTTON_PIN, INPUT_PREV, HIGH, HIGH, 0 },
+  { MAIN_BUTTON_PIN, INPUT_MAIN, HIGH, HIGH, 0 },
+  { NEXT_BUTTON_PIN, INPUT_NEXT, HIGH, HIGH, 0 },
+};
+
+void pollPhysicalButtons()
+{
+  unsigned long now = millis();
+
+  for (ButtonState &button : physicalButtons)
+  {
+    bool reading = digitalRead(button.pin);
+
+    if (reading != button.lastReading)
+    {
+      button.lastChange = now;
+      button.lastReading = reading;
+    }
+
+    if (now - button.lastChange >= BUTTON_DEBOUNCE_MS &&
+        reading != button.stableState)
+    {
+      button.stableState = reading;
+
+      if (button.stableState == LOW)
+      {
+        queuePush(button.event);
+      }
+    }
+  }
 }
 
 bool queuePop(InputEvent &ev)
@@ -1388,6 +1437,9 @@ void setup()
   void loadUrlsFromFlash();
 
   Serial.begin(115200);
+  pinMode(PREV_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MAIN_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(NEXT_BUTTON_PIN, INPUT_PULLUP);
   Serial.println("Rex UI ready. Serial commands: p=PREV  m=MAIN  n=NEXT  o=power-combo test  rex>msg=notification");
 
   loadUrlsFromFlash();
@@ -1422,6 +1474,7 @@ void loop()
   updateStopwatch();
   updateBotFace();
   updateUrlChecks();
+  pollPhysicalButtons();
 
   if (!poweredOff && wifiConnected && millis() - lastDataUpdate > 300000)
   {
