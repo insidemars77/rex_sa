@@ -71,6 +71,7 @@ class RexLauncher(ctk.CTk):
         self.configure(fg_color=BLACK)
 
         self.serial = None
+        self.serial_lock = threading.Lock()
         self.rex_app_process = None
         self.closing = False
         self.urls = load_urls()
@@ -341,6 +342,26 @@ class RexLauncher(ctk.CTk):
     def is_serial_connected(self):
         return self.serial is not None and self.serial.is_open
 
+    def verify_serial_connection(self):
+        with self.serial_lock:
+            connection = self.serial
+            if connection is None or not connection.is_open:
+                return False
+
+            device = connection.port
+
+        available_ports = {
+            port.device
+            for port in serial.tools.list_ports.comports()
+        }
+
+        with self.serial_lock:
+            return (
+                self.serial is connection
+                and connection.is_open
+                and device in available_ports
+            )
+
     def refresh_ports(self):
 
         ports = [
@@ -419,14 +440,14 @@ class RexLauncher(ctk.CTk):
 
     def disconnect_serial(self):
 
-        if self.serial:
+        with self.serial_lock:
+            if self.serial:
+                try:
+                    self.serial.close()
+                except (serial.SerialException, OSError) as e:
+                    print("Serial close error:", e)
 
-            try:
-                self.serial.close()
-            except:
-                pass
-
-        self.serial = None
+            self.serial = None
 
         self.connection_label.configure(
             text="[ OFFLINE ]",
@@ -435,18 +456,16 @@ class RexLauncher(ctk.CTk):
 
     def send_serial(self, text):
 
-        if not self.is_serial_connected():
-            return
+        with self.serial_lock:
+            if not self.is_serial_connected():
+                return
 
-        try:
-
-            self.serial.write(
-                (text + "\n").encode("utf-8")
-            )
-
-        except Exception as e:
-
-            print("Send error:", e)
+            try:
+                self.serial.write(
+                    (text + "\n").encode("utf-8")
+                )
+            except (serial.SerialException, OSError) as e:
+                print("Send error:", e)
 
     # ========================================================
     # DEVICE PAGE
@@ -1066,7 +1085,7 @@ class RexLauncher(ctk.CTk):
 
         def worker():
             process = None
-            timed_out = False
+            device_disconnected = False
             try:
                 process = subprocess.Popen(
                     cmd,
@@ -1082,14 +1101,25 @@ class RexLauncher(ctk.CTk):
                 if self.closing:
                     process.terminate()
 
-                try:
-                    out, err = process.communicate(timeout=120)
-                    code = process.returncode
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    process.kill()
-                    out, err = process.communicate()
-                    code = process.returncode
+                while True:
+                    try:
+                        out, err = process.communicate(timeout=1)
+                        break
+                    except subprocess.TimeoutExpired:
+                        if self.verify_serial_connection():
+                            continue
+
+                        device_disconnected = True
+                        self.after(0, self.disconnect_serial)
+                        process.terminate()
+                        try:
+                            out, err = process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            out, err = process.communicate()
+                        break
+
+                code = process.returncode
 
                 def done():
                     if self.closing:
@@ -1099,9 +1129,15 @@ class RexLauncher(ctk.CTk):
                     if err:
                         self.script_output.insert("end", err)
                     self.script_output.insert("end", f"\n[exit {code}]\n")
-                    if timed_out:
-                        self.script_status.configure(text="Timed out", text_color=RED)
-                        self.script_output.insert("end", "Script timed out (120s).\n")
+                    if device_disconnected:
+                        self.script_status.configure(
+                            text="Device disconnected",
+                            text_color=RED
+                        )
+                        self.script_output.insert(
+                            "end",
+                            "ESP32 connection lost; Rex-app was stopped.\n"
+                        )
                     elif code == 0:
                         self.script_status.configure(text="Done", text_color=GREEN)
                     else:
